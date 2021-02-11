@@ -94,12 +94,6 @@ def refresh_restore_map():
 
 refresh_restore_map()
 
-# TODO test data remove
-#a = pulsectl.PulseExtStreamRestoreInfo(struct_or_name="sink-input-by-application-name:Firefox",volume=50.0, device="media")
-#a = restore_db[19]
-# a.volume = pulsectl.PulseVolumeInfo(struct_or_values=[0.50,0.50], channels=2)
-#pulse.stream_restore_write(a, mode='replace')
-
 
 class ListBoxRowWithData(Gtk.ListBoxRow):
 	def __init__(self, data):
@@ -149,6 +143,23 @@ class ListBoxRestorationInfo(Gtk.ListBoxRow):
 		global currently_selected_map
 		global pulse
 		rule_name = currently_selected_map+":"+self.restoration_name
+		dialog = DialogEditRule(self, rule_name, self.restoration_row)
+		response = dialog.run()
+		if response == Gtk.ResponseType.OK:
+			new_volume = float(dialog.volume_entry.get_text())/100.0
+			if dialog.device_entry.get_text() != 'None':
+				self.restoration_row.device = dialog.device_entry.get_text()
+			if self.restoration_row.channel_count == 0 and new_volume > 0.0:
+				# default to 2 channels
+				self.restoration_row.channel_count = 2
+				self.restoration_row.channel_list = ['front-left', 'front-right']
+				self.restoration_row.volume = pulsectl.PulseVolumeInfo(struct_or_values=[0.50,0.50], channels=2)
+			if new_volume > 0:
+				for i in range(len(self.restoration_row.volume.values)):
+					self.restoration_row.volume.values[i] = new_volume
+			pulse.stream_restore_write(self.restoration_row, mode='replace')
+			self.emit("refresh")
+		dialog.destroy()
 
 	def on_delete_clicked(self, widget):
 		global currently_selected_map
@@ -164,7 +175,38 @@ class ListBoxRestorationInfo(Gtk.ListBoxRow):
 
 GObject.type_register(ListBoxRestorationInfo)
 
-# TODO have a window to fill the new routing information
+class DialogEditRule(Gtk.Dialog):
+	def __init__(self, parent, rule_name, restoration_row):
+		Gtk.Dialog.__init__(self, title="Stream Rule Edit", flags=0)
+		self.add_buttons(
+			Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
+		)
+		self.set_default_size(250, 160)
+		label = Gtk.Label(label="Currently Editing:\n"+rule_name)
+		a_area = self.get_content_area()
+		a_area.add(label)
+
+		box_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		a_area.add(box_outer)
+
+		volume_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(volume_box)
+		self.volume_entry = Gtk.Entry()
+		self.volume_entry.set_text(str(restoration_row.volume.value_flat*100))
+		volume_box.pack_start(Gtk.Label(label="Flat Volume"), False, True, 0)
+		volume_box.pack_start(self.volume_entry, True, True, 0)
+
+		device_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(device_box)
+		self.device_entry = Gtk.Entry()
+		self.device_entry.set_text(str(restoration_row.device))
+		device_box.pack_start(Gtk.Label(label="device"), False, True, 0)
+		device_box.pack_start(self.device_entry, True, True, 0)
+
+		action_area= self.get_action_area()
+		action_area.set_halign(Gtk.Align.CENTER)
+		self.show_all()
+
 class DialogConfirmDeleteRule(Gtk.Dialog):
 	def __init__(self, parent, rule_name):
 		Gtk.Dialog.__init__(self, title="Stream Rule Deletion", flags=0)
@@ -181,6 +223,11 @@ class DialogConfirmDeleteRule(Gtk.Dialog):
 		self.show_all()
 
 # TODO have a window to fill the new routing information
+# TODO test data remove
+#a = pulsectl.PulseExtStreamRestoreInfo(struct_or_name="sink-input-by-application-name:Firefox",volume=50.0, device="media")
+#a = restore_db[19]
+# a.volume = pulsectl.PulseVolumeInfo(struct_or_values=[0.50,0.50], channels=2)
+#pulse.stream_restore_write(a, mode='replace')
 class DialogNewRoutingRule(Gtk.Dialog):
 	def __init__(self, parent):
 		Gtk.Dialog.__init__(self, title="New Routing Rule", transient_for=parent, flags=0)
