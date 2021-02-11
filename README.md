@@ -8,5 +8,6 @@ WIP
 
 -----
 
-Relies on [pulsectl](https://pypi.org/project/pulsectl/) library.
+Relies on [pulsectl](https://pypi.org/project/pulsectl/) and
+[tdb](https://pypi.org/project/tdb/) libraries.
 
