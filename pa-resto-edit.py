@@ -9,7 +9,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GObject
 
 pulse = pulsectl.Pulse('restore_manip')
-currently_selected_map = ''
+currently_selected_map = 'sink-input-by-media-role'
 restore_map = {}
 
 # TODO: this covers the stream maps, not the devices volume restoration information.
@@ -67,20 +67,22 @@ db = tdb.open(device_volumes_db)
 #		# TODO https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/blob/master/src/pulsecore/tagstruct.c#L337
 #	]
 
+# pacmd list-clients to find more information
+restore_map_empty = {
+	'source-output-by-media-role': {},
+	'source-output-by-application-name': {},
+	'source-output-by-application-id': {},
+	'source-output-by-media-name': {},
+	'sink-input-by-media-role': {},
+	'sink-input-by-application-name': {},
+	'sink-input-by-application-id': {},
+	'sink-input-by-media-name': {},
+}
+
 def refresh_restore_map():
 	global pulse
 	global restore_map
-	# pacmd list-clients to find more information
-	restore_map_empty = {
-		'source-output-by-media-role': {},
-		'source-output-by-application-name': {},
-		'source-output-by-application-id': {},
-		'source-output-by-media-name': {},
-		'sink-input-by-media-role': {},
-		'sink-input-by-application-name': {},
-		'sink-input-by-application-id': {},
-		'sink-input-by-media-name': {},
-	}
+	global restore_map_empty
 	if not pulse.connected:
 		pulse = pulsectl.Pulse('restore_manip')
 
@@ -118,24 +120,30 @@ class ListBoxRestorationInfo(Gtk.ListBoxRow):
 		scroll.add(label_name)
 		grid.attach(scroll, 0, 0, 1, 1)
 
-		# TODO do we include channel_map and mute
+		# TODO do we include channel_map
+		text_mute = "off" if restoration_row.mute else "on"
+		label_mute = Gtk.Label(label=text_mute, xalign=0)
+		scroll = Gtk.ScrolledWindow(expand=True)
+		scroll.add(label_mute)
+		grid.attach(scroll, 1, 0, 1, 1)
+
 		label_volume = Gtk.Label(label=str(round(restoration_row.volume.value_flat * 100, 2))+"%", xalign=0)
 		scroll = Gtk.ScrolledWindow(expand=True)
 		scroll.add(label_volume)
-		grid.attach(scroll, 1, 0, 1, 1)
+		grid.attach(scroll, 2, 0, 1, 1)
 
 		label_device = Gtk.Label(label=str(restoration_row.device), xalign=0)
 		scroll = Gtk.ScrolledWindow(expand=True)
 		scroll.add(label_device)
-		grid.attach(scroll, 2, 0, 1, 1)
+		grid.attach(scroll, 3, 0, 1, 1)
 
 		edit_button = Gtk.Button(label="🖊")
 		edit_button.connect("clicked", self.on_edit_clicked)
-		grid.attach(edit_button, 3, 0, 1, 1)
+		grid.attach(edit_button, 4, 0, 1, 1)
 
 		delete_button = Gtk.Button(label="🗑")
 		delete_button.connect("clicked", self.on_delete_clicked)
-		grid.attach(delete_button, 4, 0, 1, 1)
+		grid.attach(delete_button, 5, 0, 1, 1)
 
 		self.add(grid)
 
@@ -157,6 +165,7 @@ class ListBoxRestorationInfo(Gtk.ListBoxRow):
 			if new_volume > 0:
 				for i in range(len(self.restoration_row.volume.values)):
 					self.restoration_row.volume.values[i] = new_volume
+			self.restoration_row.mute = 1 if dialog.mute_switch.get_state() else 0
 			pulse.stream_restore_write(self.restoration_row, mode='replace')
 			self.emit("refresh")
 		dialog.destroy()
@@ -188,6 +197,13 @@ class DialogEditRule(Gtk.Dialog):
 
 		box_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 		a_area.add(box_outer)
+
+		mute_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(mute_box)
+		self.mute_switch = Gtk.Switch()
+		self.mute_switch.set_state(restoration_row.mute == 1)
+		mute_box.pack_start(Gtk.Label(label="Muted"), False, True, 0)
+		mute_box.pack_start(self.mute_switch, False, True, 0)
 
 		volume_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 		box_outer.add(volume_box)
@@ -222,22 +238,57 @@ class DialogConfirmDeleteRule(Gtk.Dialog):
 		action_area.set_halign(Gtk.Align.CENTER)
 		self.show_all()
 
-# TODO have a window to fill the new routing information
-# TODO test data remove
-#a = pulsectl.PulseExtStreamRestoreInfo(struct_or_name="sink-input-by-application-name:Firefox",volume=50.0, device="media")
-#a = restore_db[19]
-# a.volume = pulsectl.PulseVolumeInfo(struct_or_values=[0.50,0.50], channels=2)
-#pulse.stream_restore_write(a, mode='replace')
 class DialogNewRoutingRule(Gtk.Dialog):
 	def __init__(self, parent):
-		Gtk.Dialog.__init__(self, title="New Routing Rule", transient_for=parent, flags=0)
+		Gtk.Dialog.__init__(self, title="New Stream Routing Rule", transient_for=parent, flags=0)
 		self.add_buttons(
 			Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
 		)
-		self.set_default_size(150, 100)
+		self.set_default_size(250, 160)
 		label = Gtk.Label(label="Enter the information about the new routing rule")
-		box = self.get_content_area()
-		box.add(label)
+		a_area = self.get_content_area()
+		a_area.add(label)
+
+		box_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		a_area.add(box_outer)
+
+		type_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(type_box)
+		self.type_combo = Gtk.ComboBoxText()
+		global restore_map_empty
+		for rule_type in restore_map_empty.keys():
+			self.type_combo.append_text(rule_type)
+		type_box.pack_start(Gtk.Label(label="Entry Type"), False, True, 0)
+		type_box.pack_start(self.type_combo, True, True, 0)
+
+		name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(name_box)
+		self.name_entry = Gtk.Entry()
+		self.name_entry.set_text("")
+		name_box.pack_start(Gtk.Label(label="Entry Name"), False, True, 0)
+		name_box.pack_start(self.name_entry, True, True, 0)
+
+		mute_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(mute_box)
+		self.mute_switch = Gtk.Switch()
+		self.mute_switch.set_state(False)
+		mute_box.pack_start(Gtk.Label(label="Muted"), False, True, 0)
+		mute_box.pack_start(self.mute_switch, False, True, 0)
+
+		volume_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(volume_box)
+		self.volume_entry = Gtk.Entry()
+		self.volume_entry.set_text("80.0")
+		volume_box.pack_start(Gtk.Label(label="Flat Volume"), False, True, 0)
+		volume_box.pack_start(self.volume_entry, True, True, 0)
+
+		device_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(device_box)
+		self.device_entry = Gtk.Entry()
+		self.device_entry.set_text("None")
+		device_box.pack_start(Gtk.Label(label="device"), False, True, 0)
+		device_box.pack_start(self.device_entry, True, True, 0)
+
 		action_area= self.get_action_area()
 		action_area.set_halign(Gtk.Align.CENTER)
 		self.show_all()
@@ -337,9 +388,20 @@ class RestoreDbUI(Gtk.Window):
 		response = dialog.run()
 
 		if response == Gtk.ResponseType.OK:
-			print("The OK button was clicked")
-		elif response == Gtk.ResponseType.CANCEL:
-			print("The Cancel button was clicked")
+			rule_type = dialog.type_combo.get_active_text()
+			rule_name = dialog.name_entry.get_text()
+			vol = float(dialog.volume_entry.get_text())/100.0
+			device = None if dialog.device_entry.get_text() == "None" else dialog.device_entry.get_text()
+			muted = dialog.mute_switch.get_state()
+			new_rule = pulsectl.PulseExtStreamRestoreInfo(
+					struct_or_name=rule_type+":"+rule_name,
+					device=device,
+					volume=[vol,vol],
+					mute=muted,
+					channel_list=['front-left', 'front-right']
+			)
+			pulse.stream_restore_write(new_rule, mode='replace')
+			self.on_refreshed_listbox(None)
 
 		dialog.destroy()
 
