@@ -2,10 +2,10 @@
 import pulsectl
 import tdb
 import os
+import sys
 import gi
-from ctypes import *
+import struct
 gi.require_version("Gtk", "3.0")
-#import gobject
 from gi.repository import Gtk, GObject
 
 pulse = pulsectl.Pulse('restore_manip')
@@ -26,10 +26,11 @@ restore_map = {}
 # https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/blob/master/src/pulsecore/tagstruct.h
 # Helper methods:
 # https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/blob/master/src/pulsecore/tagstruct.c
-# https://stackoverflow.com/questions/17244488/reading-struct-in-python-from-created-struct-in-c#17246128
 machine_id = open('/etc/machine-id','r').read().rstrip()
 device_volumes_db = os.environ['HOME']+'/.config/pulse/'+machine_id+'-device-volumes.tdb'
 db = tdb.open(device_volumes_db)
+
+
 # Examples:
 # version 1 - volume not valid (skip rest)
 # 42 01 30 4e
@@ -39,33 +40,163 @@ db = tdb.open(device_volumes_db)
 # format: tag format 'f' - encoding 01 - proplist 'P' - value
 # '4201 31 6d020102 760200004a3d00004a3d 31 30 4201
 # 66 4201 504e'
+class per_port_entry():
+	PA_VOLUME_NORM = 0x10000
+	def __init__(self, name, binary):
+		self.name = name
+		self.binary = binary
+		self.is_valid = False
+		self.decode()
+
+	def decode(self):
+		actions = [self.parse_version,
+			self.parse_volume_valid,
+			self.parse_channel_map,
+			self.parse_volume,
+			self.parse_muted_valid,
+			self.parse_muted,
+			self.parse_number_of_formats,
+			self.parse_formats]
+
+		for action in actions:
+			if action() < 0:
+				return
+		self.is_valid = True
+	
+	def encode(self):
+		pass
+
+	def get_u8(self):
+		if chr(self.binary[0]) != 'B':
+			return (-1, None)
+		result = self.binary[1]
+		self.binary = self.binary[2:]
+		return (1, result)
+
+	def get_bool(self):
+		if chr(self.binary[0]) == '1':
+			result = True
+		elif chr(self.binary[0]) == '0':
+			result = False
+		else:
+			return (-1, None)
+		self.binary = self.binary[1:]
+		return (1, result)
+
+	def parse_version(self):
+		(status, result) = self.get_u8()
+		self.version = result
+		return status
+
+	def parse_volume_valid(self):
+		(status, result) = self.get_bool()
+		self.volume_valid = result
+		return status
+
+	def parse_channel_map(self):
+		if chr(self.binary[0]) != 'm':
+			return -1
+		self.binary = self.binary[1:]
+		channel_map = {}
+		channel_map['channels'] = self.binary[0]
+		self.binary = self.binary[1:]
+
+		channel_map['map'] = []
+		for i in range(channel_map['channels']):
+			val = self.binary[0]
+			channel_map['map'].append(val)
+			self.binary = self.binary[1:]
+
+		self.channel_map = channel_map
+		return 1
+
+	def parse_volume(self):
+		if chr(self.binary[0]) != 'v':
+			return -1
+		self.binary = self.binary[1:]
+		volume = {}
+		volume['channels'] = self.binary[0]
+		self.binary = self.binary[1:]
+
+		volume['values'] = []
+		for i in range(volume['channels']):
+			val = struct.unpack('>I', self.binary[:4])[0]
+			val = float(val)/self.PA_VOLUME_NORM
+			volume['values'].append(val)
+			self.binary = self.binary[4:]
+		self.volume = volume
+		return 1
+
+	def parse_muted_valid(self):
+		(status, result) = self.get_bool()
+		self.muted_valid = result
+		return status
+
+	def parse_muted(self):
+		(status, result) = self.get_bool()
+		self.muted = result
+		return status
+
+	def parse_number_of_formats(self):
+		(status, result) = self.get_u8()
+		self.number_of_formats = result
+		return status
+
+	def parse_formats(self):
+		self.formats = []
+		for i in range(self.number_of_formats):
+			if self.parse_format() < 0:
+				return -1
+		return 1
+
+	def parse_format(self):
+		new_format = {}
+		if chr(self.binary[0]) != 'f':
+			return -1
+		self.binary = self.binary[1:]
+
+		(status, result) = self.get_u8()
+		if status < 0:
+			return status
+		new_format['encoding'] = result
+		new_format['plist'] = {}
+
+		if chr(self.binary[0]) != 'P':
+			return -1
+		self.binary = self.binary[1:]
+
+		if chr(self.binary[0]) != 'N' and chr(self.binary[0]) != 't':
+			return -1
+
+		# 'N'/NULL return
+		if chr(self.binary[0]) == 'N':
+			self.binary = self.binary[1:]
+			self.formats.append(new_format)
+			return 1
+
+		self.binary = self.binary[1:]
+		# TODO this is mostly unused from what I can see in the DB
+		# The only port information that make sense is the one in the name
+		# Example: sink:alsa_output.usb-C-Media_Electronics_Inc._Microsoft_LifeChat_LX-3000-00.iec958-stereo:iec958-stereo-output
+		# 't'/String, not NULL, continue parsing
+		# read string till \0
+		# length = self.get_u32
+		# get arbitrary of length: PA_TAG_ARBITRARY read_u32(len) which == length?
+		# read length len
+
+		return 1
+
 #db_keys = list(db.keys())
-# Example
-#PA_CHANNELS_MAX = 32
-#
-#class PA_CHANNEL_MAP(Structure):
-#	_fields_ = [
-#		('channels', c_uint8),
-#		('map', c_int * PA_CHANNELS_MAX)
-#	]
-#
-#class PA_CVOLUME(Structure):
-#	_fields_ = [
-#		('channels', c_uint8),
-#		('values', c_uint32 * PA_CHANNELS_MAX)
-#	]
-#
-#class PA_PER_PORT_ENTRY(Structure):
-#	_fields_ = [
-#		('version', c_uint8),
-#		('volume_valid', c_int),
-#		('channel_map', PA_CHANNEL_MAP),
-#		('volume', PA_CVOLUME),
-#		('muted_valid', c_int),
-#		('muted', c_int),
-#		('number_of_formats', c_uint8),
-#		# TODO https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/blob/master/src/pulsecore/tagstruct.c#L337
-#	]
+#for key in db.keys():
+#	x = db.get(key)
+#	p = per_port_entry(key.decode(), x)
+#	if p.is_valid:
+#		print(key.decode())
+#		print(x.hex())
+#		print(p.volume)
+#		print(p.channel_map)
+#		print("\n")
+
 
 # pacmd list-clients to find more information
 restore_map_empty = {
