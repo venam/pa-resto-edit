@@ -12,7 +12,7 @@ pulse = pulsectl.Pulse('restore_manip')
 currently_selected_map = 'sink-input-by-media-role'
 restore_map = {}
 
-# TODO: this covers the stream maps, not the devices volume restoration information.
+# This covers the stream maps, not the devices volume restoration information.
 # It would be good to add these too
 # However, currently it is not possible to check these values or update it
 # There is nothing in the native protocol extension that allows this similar to;
@@ -40,12 +40,22 @@ db = tdb.open(device_volumes_db)
 # format: tag format 'f' - encoding 01 - proplist 'P' - value
 # '4201 31 6d020102 760200004a3d00004a3d 31 30 4201
 # 66 4201 504e'
+# mapping of device with port
+# '4201 31 746d756c74696368616e6e656c2d696e70757400')
+
 class per_port_entry():
 	PA_VOLUME_NORM = 0x10000
 	def __init__(self, name, binary):
-		self.name = name
+		parts = name.split(":")
+		self.type = parts[0]
+		self.name = parts[1]
+		first_colon_loc = name.find(":")
+		self.full_name = name[first_colon_loc+1:]
+		self.port = parts[2] if len(parts) >= 3 else None
 		self.binary = binary
+		self.hex = self.binary.hex()
 		self.is_valid = False
+		self.is_port_format = False
 		self.decode()
 
 	def decode(self):
@@ -58,13 +68,55 @@ class per_port_entry():
 			self.parse_number_of_formats,
 			self.parse_formats]
 
+		if chr(self.binary[3]) == 't' or  chr(self.binary[3]) == 'N':
+			self.is_port_format = True
+			actions = [self.parse_version,
+				self.parse_port_valid,
+				self.parse_port]
+
 		for action in actions:
 			if action() < 0:
 				return
 		self.is_valid = True
-	
+
 	def encode(self):
-		pass
+		output = bytearray()
+		if self.is_port_format:
+			output.append(0x42)
+			output.append(self.version)
+			output.append(self.set_bool(self.port_valid))
+			if self.port_valid:
+				output.append(0x74)
+				for i in self.port.encode():
+					output.append(i)
+				output.append(0x00)
+			else:
+				output.append(0x4e)
+		else:
+			output.append(0x42)
+			output.append(self.version)
+			output.append(self.set_bool(self.volume_valid))
+			output.append(0x6d)
+			output.append(self.channel_map['channels'])
+			for i in self.channel_map['map']:
+				output.append(i)
+			output.append(0x76)
+			output.append(self.volume['channels'])
+			for i in self.volume['values']:
+				v = int(i * self.PA_VOLUME_NORM)
+				output += struct.pack(">I", v)
+			output.append(self.set_bool(self.muted_valid))
+			output.append(self.set_bool(self.muted))
+			output.append(0x42)
+			output.append(self.number_of_formats)
+			for i in self.formats:
+				output.append(0x66)
+				output.append(0x42)
+				output.append(i['encoding'])
+				output.append(0x50)
+				# ignore the rest of the format for now
+				output.append(0x4e)
+		return output
 
 	def get_u8(self):
 		if chr(self.binary[0]) != 'B':
@@ -82,6 +134,29 @@ class per_port_entry():
 			return (-1, None)
 		self.binary = self.binary[1:]
 		return (1, result)
+
+	def set_bool(self, val):
+		if val:
+			return 0x31
+		else:
+			return 0x30
+
+	def parse_port_valid(self):
+		(status, result) = self.get_bool()
+		self.port_valid = result
+		return status
+
+	def parse_port(self):
+		if chr(self.binary[0]) == 'N':
+			self.binary = self.binary[1:]
+			self.port = None
+			return 1
+
+		if chr(self.binary[0]) != 't':
+			return -1
+		self.binary = self.binary[1:]
+		self.port = self.binary[:-1].decode()
+		return 1
 
 	def parse_version(self):
 		(status, result) = self.get_u8()
@@ -186,16 +261,61 @@ class per_port_entry():
 
 		return 1
 
-#db_keys = list(db.keys())
-#for key in db.keys():
-#	x = db.get(key)
-#	p = per_port_entry(key.decode(), x)
-#	if p.is_valid:
-#		print(key.decode())
-#		print(x.hex())
-#		print(p.volume)
-#		print(p.channel_map)
-#		print("\n")
+device_map_empty = {
+	'source': {},
+	'sink': {},
+}
+per_port_map_empty = {
+	'source': {},
+	'sink': {},
+}
+device_map = {}
+per_port_map = {}
+
+def refresh_device_map():
+	global device_map_empty
+	global device_map
+	global per_port_map_empty
+	global per_port_map
+
+	device_map = device_map_empty
+	per_port_map = per_port_map_empty
+
+	for key in db.keys():
+		entry = db.get(key)
+		ppe = per_port_entry(key.decode(), entry)
+		if ppe.is_valid:
+			if ppe.is_port_format:
+				device_map[ppe.type][ppe.name] = ppe
+			else:
+				if ppe.name not in per_port_map[ppe.type].keys():
+					per_port_map[ppe.type][ppe.name] = {}
+				per_port_map[ppe.type][ppe.name][ppe.port] = ppe
+		else:
+			# TODO should we remove it from the DB?
+			pass
+
+refresh_device_map()
+
+# Encoding tests
+
+#for a in device_map['source'].keys():
+#	d = device_map['source'][a]
+#	print(a)
+#	print(d)
+#	print(d.hex)
+#	print(d.encode().hex())
+#	assert(d.hex == d.encode().hex())
+
+#for a in per_port_map['sink'].keys():
+#	print(a)
+#	d = per_port_map['sink'][a]
+#	for p in d.keys():
+#		print(p)
+#		val = d[p]
+#		print(val.hex)
+#		print(val.encode().hex())
+#		assert(val.hex == val.encode().hex())
 
 
 # pacmd list-clients to find more information
@@ -435,8 +555,17 @@ class RestoreDbUI(Gtk.Window):
 
 		box_outer.pack_start(Gtk.Label(label="Pulse Audio Restoration DB Editor", xalign=0.5), False, True, 0)
 
+		notebook = Gtk.Notebook()
+		box_outer.pack_start(notebook, True, True, 0)
+
+		box_streams = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		notebook.append_page(box_streams, Gtk.Label(label="Streams Restore Rules"))
+
+		box_devices = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		notebook.append_page(box_devices, Gtk.Label(label="Device Restore Rules"))
+
 		self.currently_select_map_label = Gtk.Label(label="", xalign=0.5)
-		box_outer.pack_start(self.currently_select_map_label, False, True, 0)
+		box_streams.pack_start(self.currently_select_map_label, False, True, 0)
 
 		paned = Gtk.Paned()
 		paned.set_wide_handle(True)
@@ -447,11 +576,11 @@ class RestoreDbUI(Gtk.Window):
 		right_pane_scroll = Gtk.ScrolledWindow()
 		paned.pack2(right_pane_scroll, True, False)
 
-		box_outer.pack_start(paned, True, True, 10)
+		box_streams.pack_start(paned, True, True, 10)
 
 		add_new_rule_button = Gtk.Button(label="New Routing Rule")
 		add_new_rule_button.connect("clicked", self.on_add_new_rule_clicked)
-		box_outer.pack_start(add_new_rule_button, False, False, 10)
+		box_streams.pack_start(add_new_rule_button, False, False, 10)
 
 		left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 		left_pane_scroll.add(left_box)
