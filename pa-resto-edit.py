@@ -354,7 +354,7 @@ def refresh_device_map():
 #    else:
 #        return value
 #
-#refresh_device_map()
+refresh_device_map()
 #print(json.dumps(clean_nones(device_map)))
 #sys.exit(0)
 
@@ -667,9 +667,12 @@ class RestoreDbUI(Gtk.Window):
 		device_button_edit_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 		add_new_port_button = Gtk.Button(label="Add New Port")
 		# TODO connect
+		set_as_default_device_button = Gtk.Button(label="Set As Default Device")
+		# TODO connect
 		delete_port_button = Gtk.Button(label="🗑")
 		# TODO connect
 		device_button_edit_box.pack_start(add_new_port_button, True, True, 0)
+		device_button_edit_box.pack_start(set_as_default_device_button, False, True, 0)
 		device_button_edit_box.pack_start(delete_port_button, False, True, 0)
 		right_box.pack_start(device_button_edit_box, False, True, 0)
 
