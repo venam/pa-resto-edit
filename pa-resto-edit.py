@@ -7,6 +7,7 @@ import gi
 import struct
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GObject
+import json
 
 pulse = pulsectl.Pulse('restore_manip')
 currently_selected_map = 'sink-input-by-media-role'
@@ -28,6 +29,9 @@ restore_map = {}
 # https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/blob/master/src/pulsecore/tagstruct.c
 machine_id = open('/etc/machine-id','r').read().rstrip()
 device_volumes_db = os.environ['HOME']+'/.config/pulse/'+machine_id+'-device-volumes.tdb'
+default_sink = open(os.environ['HOME']+'/.config/pulse/'+machine_id+'-default-sink').read().rstrip()
+default_source = open(os.environ['HOME']+'/.config/pulse/'+machine_id+'-default-source').read().rstrip()
+
 db = tdb.open(device_volumes_db)
 
 
@@ -43,7 +47,7 @@ db = tdb.open(device_volumes_db)
 # mapping of device with port
 # '4201 31 746d756c74696368616e6e656c2d696e70757400')
 
-class per_port_entry():
+class per_port_entry(dict):
 	PA_VOLUME_NORM = 0x10000
 	def __init__(self, name, binary):
 		parts = name.split(":")
@@ -56,7 +60,32 @@ class per_port_entry():
 		self.hex = self.binary.hex()
 		self.is_valid = False
 		self.is_port_format = False
+		self.volume_valid = None
+		self.channel_map = None
+		self.volume = None
+		self.muted_valid = None
+		self.muted = None
+		self.number_of_formats = None
+		self.formats = None
+		self.port_valid = None
 		self.decode()
+		dict.__init__(self, type=self.type,
+			#name=self.name,
+			#full_name=self.full_name,
+			port = self.port,
+			#hex = self.hex,
+			#is_valid = self.is_valid,
+			#is_port_format = self.is_port_format,
+			version = self.version,
+			volume_valid = self.volume_valid,
+			channel_map = self.channel_map,
+			volume = self.volume,
+			muted_valid = self.muted_valid,
+			muted = self.muted,
+			number_of_formats = self.number_of_formats,
+			formats = self.formats,
+			port_valid = self.port_valid,
+			)
 
 	def decode(self):
 		actions = [self.parse_version,
@@ -265,58 +294,69 @@ device_map_empty = {
 	'source': {},
 	'sink': {},
 }
-per_port_map_empty = {
-	'source': {},
-	'sink': {},
-}
 device_map = {}
-per_port_map = {}
 
+#| sink   | default port
+#|--------|------------------
+#| source | all ports + info
+# device_map {
+#   'sink': {
+#       'devicename': {
+#           'default_port': {default port info }
+#           'is_default_device': based on default sink/source
+#           'ports': {
+#               portname: {
+#                   { port information }
+#                   volume: [0.5,0.5]
+#               }
+#           }
+#       }
+#    }
+# }
 def refresh_device_map():
 	global device_map_empty
 	global device_map
-	global per_port_map_empty
-	global per_port_map
-
 	device_map = device_map_empty
-	per_port_map = per_port_map_empty
 
 	for key in db.keys():
 		entry = db.get(key)
 		ppe = per_port_entry(key.decode(), entry)
 		if ppe.is_valid:
+			if ppe.name not in device_map[ppe.type].keys():
+				device_map[ppe.type][ppe.name] = {
+					'is_default_device': ppe.name == default_sink or ppe.name == default_source,
+					'default_port': None,
+					'ports': {}
+				}
 			if ppe.is_port_format:
-				device_map[ppe.type][ppe.name] = ppe
+				device_map[ppe.type][ppe.name]['default_port'] = ppe
 			else:
-				if ppe.name not in per_port_map[ppe.type].keys():
-					per_port_map[ppe.type][ppe.name] = {}
-				per_port_map[ppe.type][ppe.name][ppe.port] = ppe
+				device_map[ppe.type][ppe.name]['ports'][ppe.port] = ppe
 		else:
-			# TODO should we remove it from the DB?
+			print("\e[0;31mcorrupted entry " + ppe.name + "in restoration DB\e[0;30m")
 			pass
 
-refresh_device_map()
 
-# Encoding tests
-
-#for a in device_map['source'].keys():
-#	d = device_map['source'][a]
-#	print(a)
-#	print(d)
-#	print(d.hex)
-#	print(d.encode().hex())
-#	assert(d.hex == d.encode().hex())
-
-#for a in per_port_map['sink'].keys():
-#	print(a)
-#	d = per_port_map['sink'][a]
-#	for p in d.keys():
-#		print(p)
-#		val = d[p]
-#		print(val.hex)
-#		print(val.encode().hex())
-#		assert(val.hex == val.encode().hex())
-
+# DEBUG
+#def clean_nones(value):
+#    """
+#    Recursively remove all None values from dictionaries and lists, and returns
+#    the result as a new dictionary or list.
+#    """
+#    if isinstance(value, list):
+#        return [clean_nones(x) for x in value if x is not None]
+#    elif isinstance(value, dict):
+#        return {
+#            key: clean_nones(val)
+#            for key, val in value.items()
+#            if val is not None
+#        }
+#    else:
+#        return value
+#
+#refresh_device_map()
+#print(json.dumps(clean_nones(device_map)))
+#sys.exit(0)
 
 # pacmd list-clients to find more information
 restore_map_empty = {
@@ -349,10 +389,13 @@ refresh_restore_map()
 
 
 class ListBoxRowWithData(Gtk.ListBoxRow):
-	def __init__(self, data):
+	def __init__(self, data, extra = None):
 		super(Gtk.ListBoxRow, self).__init__()
 		self.data = data
-		self.add(Gtk.Label(label=data, xalign=0))
+		label = Gtk.Label(label=data, xalign=0)
+		if extra:
+			label.set_markup(extra)
+		self.add(label)
 
 class ListBoxRestorationInfo(Gtk.ListBoxRow):
 	__gsignals__ = {
@@ -553,7 +596,8 @@ class RestoreDbUI(Gtk.Window):
 		box_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 		self.add(box_outer)
 
-		box_outer.pack_start(Gtk.Label(label="Pulse Audio Restoration DB Editor", xalign=0.5), False, True, 0)
+		label = Gtk.Label(label="Pulse Audio Restoration DB Editor", xalign=0.5)
+		box_outer.pack_start(label, False, True, 0)
 
 		notebook = Gtk.Notebook()
 		box_outer.pack_start(notebook, True, True, 0)
@@ -564,6 +608,73 @@ class RestoreDbUI(Gtk.Window):
 		box_devices = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 		notebook.append_page(box_devices, Gtk.Label(label="Device Restore Rules"))
 
+		# Device Restoration
+
+		self.selected_device_label = Gtk.Label(label="", xalign=0.5)
+		box_devices.pack_start(self.selected_device_label, False, True, 0)
+
+		paned = Gtk.Paned()
+		paned.set_wide_handle(True)
+		paned.set_position(240)
+		left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		paned.pack1(left_box, True, False)
+		right_pane_scroll = Gtk.ScrolledWindow()
+		paned.pack2(right_pane_scroll, True, False)
+		box_devices.pack_start(paned, True, True, 10)
+
+
+		right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		right_pane_scroll.add(right_box)
+
+		left_box.pack_start(Gtk.Label(label="Sinks", xalign=0), False, True, 0)
+		scroll = Gtk.ScrolledWindow()
+		self.listbox_sink = Gtk.ListBox()
+		self.listbox_sink.set_selection_mode(Gtk.SelectionMode.NONE)
+		scroll.add(self.listbox_sink)
+		left_box.pack_start(scroll, True, True, 0)
+
+		left_separator = Gtk.Separator()
+		left_box.pack_start(left_separator, False, True, 0)
+
+		left_box.pack_start(Gtk.Label(label="Sources", xalign=0), False, True, 0)
+		scroll = Gtk.ScrolledWindow()
+		self.listbox_source = Gtk.ListBox()
+		self.listbox_source.set_selection_mode(Gtk.SelectionMode.NONE)
+		scroll.add(self.listbox_source)
+		left_box.pack_start(scroll, True, True, 0)
+
+		self.refresh_listbox_sink()
+		self.refresh_listbox_source()
+
+		default_port_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		right_box.pack_start(default_port_box, False, True, 0)
+		default_port_box.pack_start(Gtk.Label(label="Default Port", xalign=0.5), False, True, 0)
+		self.default_port_entry = Gtk.Entry()
+		self.default_port_entry.set_text("")
+		default_port_box.pack_start(self.default_port_entry, True, True, 0)
+		save_default_port_button = Gtk.Button(label="Save Default Port")
+		# TODO connect
+		default_port_box.pack_start(save_default_port_button, False, True, 0)
+
+		right_box.pack_start(Gtk.Separator(), False, True, 0)
+
+		right_box.pack_start(Gtk.Label(label="Available Ports", xalign=0.5), False, False, 0)
+		scroll = Gtk.ScrolledWindow()
+		self.listbox_available_ports = Gtk.ListBox()
+		scroll.add(self.listbox_available_ports)
+		right_box.pack_start(scroll, True, True, 0)
+
+		device_button_edit_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		add_new_port_button = Gtk.Button(label="Add New Port")
+		# TODO connect
+		delete_port_button = Gtk.Button(label="🗑")
+		# TODO connect
+		device_button_edit_box.pack_start(add_new_port_button, True, True, 0)
+		device_button_edit_box.pack_start(delete_port_button, False, True, 0)
+		right_box.pack_start(device_button_edit_box, False, True, 0)
+
+		# Stream Restoration
+
 		self.currently_select_map_label = Gtk.Label(label="", xalign=0.5)
 		box_streams.pack_start(self.currently_select_map_label, False, True, 0)
 
@@ -572,22 +683,20 @@ class RestoreDbUI(Gtk.Window):
 		paned.set_position(240)
 		left_pane_scroll = Gtk.ScrolledWindow()
 		paned.pack1(left_pane_scroll, True, False)
-
 		right_pane_scroll = Gtk.ScrolledWindow()
 		paned.pack2(right_pane_scroll, True, False)
-
 		box_streams.pack_start(paned, True, True, 10)
+		left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		left_pane_scroll.add(left_box)
+		self.right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		right_pane_scroll.add(self.right_box)
 
 		add_new_rule_button = Gtk.Button(label="New Routing Rule")
 		add_new_rule_button.connect("clicked", self.on_add_new_rule_clicked)
 		box_streams.pack_start(add_new_rule_button, False, False, 10)
 
-		left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-		left_pane_scroll.add(left_box)
 
-		self.right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-		right_pane_scroll.add(self.right_box)
-
+		left_box.pack_start(Gtk.Label(label="Sink Inputs"), False, True, 0)
 		listbox_sink_input = Gtk.ListBox()
 		listbox_sink_input.set_selection_mode(Gtk.SelectionMode.NONE)
 		left_box.pack_start(listbox_sink_input, True, True, 0)
@@ -595,15 +704,13 @@ class RestoreDbUI(Gtk.Window):
 		left_separator = Gtk.Separator()
 		left_box.pack_start(left_separator, False, True, 0)
 
+		left_box.pack_start(Gtk.Label(label="Source Outputs"), False, True, 0)
 		listbox_source_output = Gtk.ListBox()
 		listbox_source_output.set_selection_mode(Gtk.SelectionMode.NONE)
 		left_box.pack_start(listbox_source_output, True, True, 0)
 
 
 		self.right_listbox = Gtk.ListBox()
-		items = "Sink and Source restoration info".split()
-		for item in items:
-			self.right_listbox.add(ListBoxRowWithData(item))
 		self.right_box.pack_start(self.right_listbox, True, True, 0)
 
 		listbox_sink_input.add(ListBoxRowWithData("sink-input-by-media-role"))
@@ -664,6 +771,54 @@ class RestoreDbUI(Gtk.Window):
 			self.on_refreshed_listbox(None)
 
 		dialog.destroy()
+
+	def refresh_listbox_sink(self):
+		for name in device_map['sink'].keys():
+			if device_map['sink'][name]['is_default_device']:
+				self.listbox_sink.add(ListBoxRowWithData(name, "<b>"+name+"</b>"))
+			else:
+				self.listbox_sink.add(ListBoxRowWithData(name))
+		self.listbox_sink.connect("row-activated", self.on_selected_sink)
+		self.listbox_sink.show_all()
+
+	def refresh_listbox_source(self):
+		for name in device_map['source'].keys():
+			if device_map['source'][name]['is_default_device']:
+				self.listbox_source.add(ListBoxRowWithData(name, "<b>"+name+"</b>"))
+			else:
+				self.listbox_source.add(ListBoxRowWithData(name))
+		self.listbox_source.connect("row-activated", self.on_selected_source)
+		self.listbox_source.show_all()
+
+
+	def on_selected_sink(self, widget, row):
+		global device_map
+		self.show_selected_device(row.data, device_map['sink'][row.data])
+
+	def on_selected_source(self, widget, row):
+		global device_map
+		self.show_selected_device(row.data, device_map['source'][row.data])
+
+	def show_selected_device(self, name, device):
+		self.selected_device_label.set_label(name)
+		default_port = device['default_port']['port']
+		if default_port:
+			self.default_port_entry.set_text(default_port)
+		else:
+			self.default_port_entry.set_text("null")
+
+		children = self.listbox_available_ports.get_children()
+		for child in children:
+			self.listbox_available_ports.remove(child)
+
+		ports = device['ports']
+		for i in ports.keys():
+			# TODO create a ListBoxDevicePortInfo child of ListBoxRow similar to ListBoxRestorationInfo
+			# pass it the current device selected and the port info
+			# for now show only muted_valid, muted and volume_valid, volume, nb_channels
+			self.listbox_available_ports.add(ListBoxRowWithData(i))
+		self.listbox_available_ports.show_all()
+
 
 win = RestoreDbUI()
 win.connect("destroy", Gtk.main_quit)
