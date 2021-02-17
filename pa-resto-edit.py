@@ -11,6 +11,8 @@ import json
 
 pulse = pulsectl.Pulse('restore_manip')
 currently_selected_map = 'sink-input-by-media-role'
+currently_selected_device = ''
+currently_selected_device_type = ''
 restore_map = {}
 
 # This covers the stream maps, not the devices volume restoration information.
@@ -290,10 +292,6 @@ class per_port_entry(dict):
 
 		return 1
 
-device_map_empty = {
-	'source': {},
-	'sink': {},
-}
 device_map = {}
 
 #| sink   | default port
@@ -314,9 +312,15 @@ device_map = {}
 #    }
 # }
 def refresh_device_map():
-	global device_map_empty
 	global device_map
-	device_map = device_map_empty
+	global default_sink
+	global default_source
+	device_map.clear()
+	device_map['source'] = {}
+	device_map['sink'] = {}
+
+	default_sink = open(os.environ['HOME']+'/.config/pulse/'+machine_id+'-default-sink').read().rstrip()
+	default_source = open(os.environ['HOME']+'/.config/pulse/'+machine_id+'-default-source').read().rstrip()
 
 	for key in db.keys():
 		entry = db.get(key)
@@ -476,7 +480,62 @@ class ListBoxRestorationInfo(Gtk.ListBoxRow):
 			self.emit("refresh")
 		dialog.destroy()
 
+
+class ListBoxDevicePortInfo(Gtk.ListBoxRow):
+	__gsignals__ = {
+		'refresh': (GObject.SignalFlags.RUN_LAST, GObject.TYPE_NONE, ())
+	}
+	def __init__(self, device_name, device_type, port_name, port_info):
+		super(Gtk.ListBoxRow, self).__init__()
+		global device_map
+		# for now show only muted, volume, nb_channels
+		self.port_name = port_name
+		self.port_info = port_info
+
+		grid = Gtk.Grid()
+		grid.set_column_spacing(10)
+		self.add(grid)
+
+		label_name = Gtk.Label(label=port_name, xalign=0)
+		default_port = device_map[device_type][device_name]['default_port']['port'] or 'null'
+		if port_name == default_port:
+			label_name.set_markup("<b>"+port_name+"</b>")
+		scroll = Gtk.ScrolledWindow(expand=True)
+		scroll.add(label_name)
+		grid.attach(scroll, 0, 0, 1, 1)
+
+		text_mute = "off" if self.port_info.muted else "on"
+		label_mute = Gtk.Label(label=text_mute, xalign=0)
+		scroll = Gtk.ScrolledWindow(expand=True)
+		scroll.add(label_mute)
+		grid.attach(scroll, 1, 0, 1, 1)
+
+		volume = 0.0
+		if len(self.port_info.volume['values']) > 0:
+			volume = round(sum(self.port_info.volume['values'])*100/len(self.port_info.volume['values']), 2)
+		label_volume = Gtk.Label(label=str(volume)+"%", xalign=0)
+		scroll = Gtk.ScrolledWindow(expand=True)
+		scroll.add(label_volume)
+		grid.attach(scroll, 2, 0, 1, 1)
+
+		label_channels = Gtk.Label(label="#channels:"+str(self.port_info.channel_map['channels']), xalign=0)
+		scroll = Gtk.ScrolledWindow(expand=True)
+		scroll.add(label_channels)
+		grid.attach(scroll, 3, 0, 1, 1)
+
+		edit_button = Gtk.Button(label="🖊")
+		# TODO connect
+		#edit_button.connect("clicked", self.on_edit_clicked)
+		grid.attach(edit_button, 4, 0, 1, 1)
+
+		delete_button = Gtk.Button(label="🗑")
+		# TODO connect
+		#delete_button.connect("clicked", self.on_delete_clicked)
+		grid.attach(delete_button, 5, 0, 1, 1)
+
+
 GObject.type_register(ListBoxRestorationInfo)
+GObject.type_register(ListBoxDevicePortInfo)
 
 class DialogEditRule(Gtk.Dialog):
 	def __init__(self, parent, rule_name, restoration_row):
@@ -653,7 +712,7 @@ class RestoreDbUI(Gtk.Window):
 		self.default_port_entry.set_text("")
 		default_port_box.pack_start(self.default_port_entry, True, True, 0)
 		save_default_port_button = Gtk.Button(label="Save Default Port")
-		# TODO connect
+		save_default_port_button.connect("clicked", self.save_default_port_clicked)
 		default_port_box.pack_start(save_default_port_button, False, True, 0)
 
 		right_box.pack_start(Gtk.Separator(), False, True, 0)
@@ -666,8 +725,8 @@ class RestoreDbUI(Gtk.Window):
 
 		device_button_edit_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 		add_new_port_button = Gtk.Button(label="Add New Port")
-		# TODO connect
-		set_as_default_device_button = Gtk.Button(label="Set As Default Device")
+		set_as_default_device_button = Gtk.Button(label="Set As Fallback Device")
+		set_as_default_device_button.connect("clicked", self.set_default_device_clicked)
 		# TODO connect
 		delete_port_button = Gtk.Button(label="🗑")
 		# TODO connect
@@ -776,6 +835,11 @@ class RestoreDbUI(Gtk.Window):
 		dialog.destroy()
 
 	def refresh_listbox_sink(self):
+		global device_map
+		children = self.listbox_sink.get_children()
+		for child in children:
+			self.listbox_sink.remove(child)
+
 		for name in device_map['sink'].keys():
 			if device_map['sink'][name]['is_default_device']:
 				self.listbox_sink.add(ListBoxRowWithData(name, "<b>"+name+"</b>"))
@@ -785,6 +849,11 @@ class RestoreDbUI(Gtk.Window):
 		self.listbox_sink.show_all()
 
 	def refresh_listbox_source(self):
+		global device_map
+		children = self.listbox_source.get_children()
+		for child in children:
+			self.listbox_source.remove(child)
+
 		for name in device_map['source'].keys():
 			if device_map['source'][name]['is_default_device']:
 				self.listbox_source.add(ListBoxRowWithData(name, "<b>"+name+"</b>"))
@@ -793,16 +862,19 @@ class RestoreDbUI(Gtk.Window):
 		self.listbox_source.connect("row-activated", self.on_selected_source)
 		self.listbox_source.show_all()
 
-
 	def on_selected_sink(self, widget, row):
 		global device_map
-		self.show_selected_device(row.data, device_map['sink'][row.data])
+		self.show_selected_device(row.data, device_map['sink'][row.data], 'sink')
 
 	def on_selected_source(self, widget, row):
 		global device_map
-		self.show_selected_device(row.data, device_map['source'][row.data])
+		self.show_selected_device(row.data, device_map['source'][row.data], 'source')
 
-	def show_selected_device(self, name, device):
+	def show_selected_device(self, name, device, device_type):
+		global currently_selected_device
+		global currently_selected_device_type
+		currently_selected_device = name
+		currently_selected_device_type = device_type
 		self.selected_device_label.set_label(name)
 		default_port = device['default_port']['port']
 		if default_port:
@@ -816,11 +888,61 @@ class RestoreDbUI(Gtk.Window):
 
 		ports = device['ports']
 		for i in ports.keys():
-			# TODO create a ListBoxDevicePortInfo child of ListBoxRow similar to ListBoxRestorationInfo
-			# pass it the current device selected and the port info
-			# for now show only muted_valid, muted and volume_valid, volume, nb_channels
-			self.listbox_available_ports.add(ListBoxRowWithData(i))
+			self.listbox_available_ports.add(ListBoxDevicePortInfo(name, device_type, i, ports[i]))
+		# TODO connect the refresh
 		self.listbox_available_ports.show_all()
+
+	def save_default_port_clicked(self, widget):
+		global db
+		global currently_selected_device
+		global currently_selected_device_type
+		if currently_selected_device == '':
+			return
+		new_default_port = self.default_port_entry.get_text()
+		if new_default_port == "null":
+			new_default_port = None
+		current_default_port = device_map[currently_selected_device_type][currently_selected_device]['default_port'].port
+		if new_default_port == current_default_port:
+			return
+
+		if new_default_port == None:
+			device_map[currently_selected_device_type][currently_selected_device]['default_port'].port = None
+			device_map[currently_selected_device_type][currently_selected_device]['default_port'].port_valid = False
+		else:
+			device_map[currently_selected_device_type][currently_selected_device]['default_port'].port = new_default_port
+			device_map[currently_selected_device_type][currently_selected_device]['default_port'].port_valid = True
+
+		key_of_default = (currently_selected_device_type+":"+currently_selected_device).encode()
+		to_replace = bytes(device_map[currently_selected_device_type][currently_selected_device]['default_port'].encode())
+		db.store(key_of_default, to_replace, tdb.REPLACE)
+
+		refresh_device_map()
+		self.show_selected_device(
+			currently_selected_device,
+			device_map[currently_selected_device_type][currently_selected_device],
+			currently_selected_device_type)
+
+	def set_default_device_clicked(self, widget):
+		global pulse
+		global machine_id
+		global currently_selected_device
+		global currently_selected_device_type
+		if currently_selected_device == '' or currently_selected_device == None:
+			return
+		if currently_selected_device_type == 'sink':
+			pulse.sink_default_set(currently_selected_device)
+			open(os.environ['HOME']+'/.config/pulse/'+machine_id+'-default-sink','w').write(currently_selected_device)
+		else:
+			pulse.source_default_set(currently_selected_device)
+			open(os.environ['HOME']+'/.config/pulse/'+machine_id+'-default-source','w').write(currently_selected_device)
+
+		refresh_device_map()
+		self.refresh_listbox_sink()
+		self.refresh_listbox_source()
+		self.show_selected_device(
+			currently_selected_device,
+			device_map[currently_selected_device_type][currently_selected_device],
+			currently_selected_device_type)
 
 
 win = RestoreDbUI()

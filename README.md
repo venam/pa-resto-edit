@@ -7,7 +7,7 @@ An interface to easily edit the restoration/routing rules of PulseAudio.
 
 - [x] `module-stream-restore` (using core api)
 - [ ] `module-device-restore` (using tdb - WIP)
-- [ ] `module-default-device-restore` (simple files - WIP - can be done
+- [x] `module-default-device-restore` (using file and core api - can be done
   through other tools)
 - [ ] `module-card-restore` (not covered)
 - [ ] `module-device-manager` (not covered - isn't used by most distros)
