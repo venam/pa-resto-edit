@@ -3,10 +3,11 @@
 
 An interface to easily edit the restoration/routing rules of PulseAudio.
 
-![GUI](https://github.com/venam/pa-resto-edit/raw/master/assets/gui.png)
+![GUI Stream Restore](https://github.com/venam/pa-resto-edit/raw/master/assets/gui.png)
+![GUI Device Restore](https://github.com/venam/pa-resto-edit/raw/master/assets/gui2.png)
 
 - [x] `module-stream-restore` (using core api)
-- [ ] `module-device-restore` (using tdb - WIP)
+- [x] `module-device-restore` (using tdb)
 - [x] `module-default-device-restore` (using file and core api - can be done
   through other tools)
 - [ ] `module-card-restore` (not covered)
