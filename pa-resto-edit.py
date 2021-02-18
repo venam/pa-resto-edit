@@ -59,16 +59,17 @@ class per_port_entry(dict):
 		self.full_name = name[first_colon_loc+1:]
 		self.port = parts[2] if len(parts) >= 3 else None
 		self.binary = binary
-		self.hex = self.binary.hex()
+		self.version = 1
+		self.hex = self.binary.hex() if self.binary else ''
 		self.is_valid = False
 		self.is_port_format = False
 		self.volume_valid = None
-		self.channel_map = None
-		self.volume = None
+		self.channel_map = {'channels':0, 'map':[]}
+		self.volume = {'channels':0, 'values':[]}
 		self.muted_valid = None
 		self.muted = None
-		self.number_of_formats = None
-		self.formats = None
+		self.number_of_formats = 1
+		self.formats = [{'encoding': 1 }]
 		self.port_valid = None
 		self.decode()
 		dict.__init__(self, type=self.type,
@@ -90,6 +91,8 @@ class per_port_entry(dict):
 			)
 
 	def decode(self):
+		if not self.binary:
+			return
 		actions = [self.parse_version,
 			self.parse_volume_valid,
 			self.parse_channel_map,
@@ -342,22 +345,22 @@ def refresh_device_map():
 
 
 # DEBUG
-#def clean_nones(value):
-#    """
-#    Recursively remove all None values from dictionaries and lists, and returns
-#    the result as a new dictionary or list.
-#    """
-#    if isinstance(value, list):
-#        return [clean_nones(x) for x in value if x is not None]
-#    elif isinstance(value, dict):
-#        return {
-#            key: clean_nones(val)
-#            for key, val in value.items()
-#            if val is not None
-#        }
-#    else:
-#        return value
-#
+def clean_nones(value):
+    """
+    Recursively remove all None values from dictionaries and lists, and returns
+    the result as a new dictionary or list.
+    """
+    if isinstance(value, list):
+        return [clean_nones(x) for x in value if x is not None]
+    elif isinstance(value, dict):
+        return {
+            key: clean_nones(val)
+            for key, val in value.items()
+            if val is not None
+        }
+    else:
+        return value
+
 refresh_device_map()
 #print(json.dumps(clean_nones(device_map)))
 #sys.exit(0)
@@ -551,10 +554,11 @@ class ListBoxDevicePortInfo(Gtk.ListBoxRow):
 		dialog = DialogPortEditRule(self, self.device_type, self.device_name, self.port_name)
 		response = dialog.run()
 		if response == Gtk.ResponseType.OK:
-			channel_map_str = dialog.channel_entry.get_text()
-			channel_map = [int(element) for element in channel_map_str.split(',')]
+			channel_map_str = dialog.channel_entry.get_text().rstrip()
+			channel_map = []
+			if channel_map_str != '':
+				channel_map = [int(element) for element in channel_map_str.split(',')]
 			port_row = device_map[self.device_type][self.device_name]['ports'][self.port_name]
-			print(port_row.encode().hex())
 
 			port_row.muted_valid = dialog.muted_valid.get_active()
 			port_row.muted = dialog.mute_switch.get_state()
@@ -582,8 +586,8 @@ class DialogPortEditRule(Gtk.Dialog):
 			Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
 		)
 		self.set_default_size(250, 160)
-		rule_name = device_type+":"+device_name+"\nport => "+port_name
-		label = Gtk.Label(label="Currently Editing:\n"+rule_name)
+		rule_name = device_type+":"+device_name
+		label = Gtk.Label(label="Rule For Device:\n"+rule_name)
 
 		a_area = self.get_content_area()
 		a_area.add(label)
@@ -594,7 +598,19 @@ class DialogPortEditRule(Gtk.Dialog):
 
 		global device_map
 
-		port_row = device_map[device_type][device_name]['ports'][port_name]
+		if port_name != '':
+			port_row = device_map[device_type][device_name]['ports'][port_name]
+		else:
+			port_row = per_port_entry(device_type+":"+device_name, None)
+
+		port_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(port_box)
+		self.port_entry = Gtk.Entry()
+		self.port_entry.set_text(port_name)
+		if port_name != '':
+			self.port_entry.set_editable(False)
+		port_box.pack_start(Gtk.Label(label="Port Name"), False, True, 0)
+		port_box.pack_start(self.port_entry, True, True, 0)
 
 		mute_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 		box_outer.add(mute_box)
@@ -821,11 +837,11 @@ class RestoreDbUI(Gtk.Window):
 
 		device_button_edit_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 		add_new_port_button = Gtk.Button(label="Add New Port")
+		add_new_port_button.connect("clicked", self.add_new_port_clicked)
 		set_as_default_device_button = Gtk.Button(label="Set As Fallback Device")
 		set_as_default_device_button.connect("clicked", self.set_default_device_clicked)
 		delete_device_button = Gtk.Button(label="🗑")
 		delete_device_button.connect("clicked", self.delete_device_clicked)
-		# TODO connect
 		device_button_edit_box.pack_start(add_new_port_button, True, True, 0)
 		device_button_edit_box.pack_start(set_as_default_device_button, False, True, 0)
 		device_button_edit_box.pack_start(delete_device_button, False, True, 0)
@@ -1066,6 +1082,43 @@ class RestoreDbUI(Gtk.Window):
 			self.show_selected_device("", None, "")
 
 		dialog.destroy()
+
+	def add_new_port_clicked(self, widget):
+		global db
+		global device_map
+		global currently_selected_device
+		global currently_selected_device_type
+		if currently_selected_device == '':
+			return
+		full_device_name = currently_selected_device_type+":"+currently_selected_device
+
+		dialog = DialogPortEditRule(self, currently_selected_device_type, currently_selected_device, '')
+		response = dialog.run()
+		if response == Gtk.ResponseType.OK:
+			channel_map_str = dialog.channel_entry.get_text().rstrip()
+			channel_map = []
+			if channel_map_str != '':
+				channel_map = [int(element) for element in channel_map_str.split(',')]
+
+			new_port_name = dialog.port_entry.get_text()
+			port_row = per_port_entry(full_device_name+":"+new_port_name, None)
+
+			port_row.muted_valid = dialog.muted_valid.get_active()
+			port_row.muted = dialog.mute_switch.get_state()
+			port_row.volume_valid = dialog.volume_valid.get_active()
+			port_row.volume['channels'] = len(channel_map)
+			port_row.channel_map['channels'] = port_row.volume['channels']
+			port_row.channel_map['map'] = channel_map
+			vol = float(dialog.volume_entry.get_text())/100.0
+			port_row.volume['values'] = [vol for i in range(port_row.volume['channels'])]
+
+			key_of_entry = (full_device_name+":"+new_port_name).encode()
+			to_replace = bytes(port_row.encode())
+			db.store(key_of_entry, to_replace, tdb.REPLACE)
+			self.on_refreshed_device_port_listbox(None)
+
+		dialog.destroy()
+
 
 	def on_refreshed_device_port_listbox(self, listbox_widget):
 		global currently_selected_device
