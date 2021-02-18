@@ -489,6 +489,8 @@ class ListBoxDevicePortInfo(Gtk.ListBoxRow):
 		super(Gtk.ListBoxRow, self).__init__()
 		global device_map
 		# for now show only muted, volume, nb_channels
+		self.device_name = device_name
+		self.device_type = device_type
 		self.port_name = port_name
 		self.port_info = port_info
 
@@ -529,9 +531,19 @@ class ListBoxDevicePortInfo(Gtk.ListBoxRow):
 		grid.attach(edit_button, 4, 0, 1, 1)
 
 		delete_button = Gtk.Button(label="🗑")
-		# TODO connect
-		#delete_button.connect("clicked", self.on_delete_clicked)
+		delete_button.connect("clicked", self.delete_port_button_clicked)
 		grid.attach(delete_button, 5, 0, 1, 1)
+
+	def delete_port_button_clicked(self, widget):
+		global db
+		global device_map
+		full_device_name = self.device_type+":"+self.device_name
+		dialog = DialogConfirmDeleteRule(self, full_device_name+"\nport => "+self.port_name, "Device Port Rule Deletion")
+		response = dialog.run()
+		if response == Gtk.ResponseType.OK:
+			db.delete((full_device_name+":"+self.port_name).encode())
+			self.emit("refresh")
+		dialog.destroy()
 
 
 GObject.type_register(ListBoxRestorationInfo)
@@ -892,8 +904,9 @@ class RestoreDbUI(Gtk.Window):
 
 		ports = device['ports']
 		for i in ports.keys():
-			self.listbox_available_ports.add(ListBoxDevicePortInfo(name, device_type, i, ports[i]))
-		# TODO connect the refresh
+			device_port_listbox = ListBoxDevicePortInfo(name, device_type, i, ports[i])
+			self.listbox_available_ports.add(device_port_listbox)
+			device_port_listbox.connect("refresh", self.on_refreshed_device_port_listbox)
 		self.listbox_available_ports.show_all()
 
 	def save_default_port_clicked(self, widget):
@@ -969,6 +982,17 @@ class RestoreDbUI(Gtk.Window):
 			self.show_selected_device("", None, "")
 
 		dialog.destroy()
+
+	def on_refreshed_device_port_listbox(self, listbox_widget):
+		global currently_selected_device
+		global currently_selected_device_type
+		refresh_device_map()
+		self.refresh_listbox_sink()
+		self.refresh_listbox_source()
+		self.show_selected_device(
+			currently_selected_device,
+			device_map[currently_selected_device_type][currently_selected_device],
+			currently_selected_device_type)
 
 
 
