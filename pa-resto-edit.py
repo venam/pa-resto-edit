@@ -526,8 +526,7 @@ class ListBoxDevicePortInfo(Gtk.ListBoxRow):
 		grid.attach(scroll, 3, 0, 1, 1)
 
 		edit_button = Gtk.Button(label="🖊")
-		# TODO connect
-		#edit_button.connect("clicked", self.on_edit_clicked)
+		edit_button.connect("clicked", self.edit_port_button_clicked)
 		grid.attach(edit_button, 4, 0, 1, 1)
 
 		delete_button = Gtk.Button(label="🗑")
@@ -545,9 +544,94 @@ class ListBoxDevicePortInfo(Gtk.ListBoxRow):
 			self.emit("refresh")
 		dialog.destroy()
 
+	def edit_port_button_clicked(self, widget):
+		# we can edit mute,volume,channel map?
+		global db
+		global device_map
+		dialog = DialogPortEditRule(self, self.device_type, self.device_name, self.port_name)
+		response = dialog.run()
+		if response == Gtk.ResponseType.OK:
+			channel_map_str = dialog.channel_entry.get_text()
+			channel_map = [int(element) for element in channel_map_str.split(',')]
+			port_row = device_map[self.device_type][self.device_name]['ports'][self.port_name]
+			print(port_row.encode().hex())
+
+			port_row.muted_valid = dialog.muted_valid.get_active()
+			port_row.muted = dialog.mute_switch.get_state()
+			port_row.volume_valid = dialog.volume_valid.get_active()
+			port_row.volume['channels'] = len(channel_map)
+			port_row.channel_map['channels'] = port_row.volume['channels']
+			port_row.channel_map['map'] = channel_map
+			vol = float(dialog.volume_entry.get_text())/100.0
+			port_row.volume['values'] = [vol for i in range(port_row.volume['channels'])]
+
+			key_of_entry = (self.device_type+":"+self.device_name+":"+self.port_name).encode()
+			to_replace = bytes(port_row.encode())
+			db.store(key_of_entry, to_replace, tdb.REPLACE)
+
+			self.emit("refresh")
+		dialog.destroy()
 
 GObject.type_register(ListBoxRestorationInfo)
 GObject.type_register(ListBoxDevicePortInfo)
+
+class DialogPortEditRule(Gtk.Dialog):
+	def __init__(self, parent, device_type, device_name, port_name):
+		Gtk.Dialog.__init__(self, title="Stream Rule Edit", flags=0)
+		self.add_buttons(
+			Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
+		)
+		self.set_default_size(250, 160)
+		rule_name = device_type+":"+device_name+"\nport => "+port_name
+		label = Gtk.Label(label="Currently Editing:\n"+rule_name)
+
+		a_area = self.get_content_area()
+		a_area.add(label)
+		a_area.pack_start(Gtk.Separator(), False, True, 0)
+
+		box_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+		a_area.add(box_outer)
+
+		global device_map
+
+		port_row = device_map[device_type][device_name]['ports'][port_name]
+
+		mute_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(mute_box)
+		self.mute_switch = Gtk.Switch()
+		self.mute_switch.set_state(port_row.muted)
+		self.muted_valid = Gtk.CheckButton(label="valid")
+		self.muted_valid.set_active(port_row.muted_valid)
+		mute_box.pack_start(Gtk.Label(label="Muted"), False, True, 0)
+		mute_box.pack_start(self.muted_valid, False, True, 0)
+		mute_box.pack_start(self.mute_switch, False, True, 0)
+
+		volume = 0.0
+		if len(port_row.volume['values']) > 0:
+			volume = round(sum(port_row.volume['values'])*100/len(port_row.volume['values']), 2)
+		volume_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(volume_box)
+		self.volume_entry = Gtk.Entry()
+		self.volume_entry.set_text(str(volume))
+		self.volume_valid = Gtk.CheckButton(label="valid")
+		self.volume_valid.set_active(port_row.volume_valid)
+		volume_box.pack_start(Gtk.Label(label="Flat Volume"), False, True, 0)
+		volume_box.pack_start(self.volume_valid, True, True, 0)
+		volume_box.pack_start(self.volume_entry, True, True, 0)
+
+		str_map = [str(element) for element in port_row.channel_map['map']]
+		channel_map = ','.join(str_map)
+		channel_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+		box_outer.add(channel_box)
+		self.channel_entry = Gtk.Entry()
+		self.channel_entry.set_text(channel_map)
+		channel_box.pack_start(Gtk.Label(label="Channel Map (comma separated)"), False, True, 0)
+		channel_box.pack_start(self.channel_entry, True, True, 0)
+
+		action_area= self.get_action_area()
+		action_area.set_halign(Gtk.Align.CENTER)
+		self.show_all()
+
 
 class DialogEditRule(Gtk.Dialog):
 	def __init__(self, parent, rule_name, restoration_row):
