@@ -472,7 +472,7 @@ class ListBoxRestorationInfo(Gtk.ListBoxRow):
 		global currently_selected_map
 		global pulse
 		rule_name = currently_selected_map+":"+self.restoration_name
-		dialog = DialogConfirmDeleteRule(self, rule_name)
+		dialog = DialogConfirmDeleteRule(self, rule_name, "Stream Rule Deletion")
 		response = dialog.run()
 
 		if response == Gtk.ResponseType.OK:
@@ -577,8 +577,8 @@ class DialogEditRule(Gtk.Dialog):
 		self.show_all()
 
 class DialogConfirmDeleteRule(Gtk.Dialog):
-	def __init__(self, parent, rule_name):
-		Gtk.Dialog.__init__(self, title="Stream Rule Deletion", flags=0)
+	def __init__(self, parent, rule_name, dialog_title):
+		Gtk.Dialog.__init__(self, title=dialog_title, flags=0)
 
 		self.add_buttons(
 			Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
@@ -727,12 +727,12 @@ class RestoreDbUI(Gtk.Window):
 		add_new_port_button = Gtk.Button(label="Add New Port")
 		set_as_default_device_button = Gtk.Button(label="Set As Fallback Device")
 		set_as_default_device_button.connect("clicked", self.set_default_device_clicked)
-		# TODO connect
-		delete_port_button = Gtk.Button(label="🗑")
+		delete_device_button = Gtk.Button(label="🗑")
+		delete_device_button.connect("clicked", self.delete_device_clicked)
 		# TODO connect
 		device_button_edit_box.pack_start(add_new_port_button, True, True, 0)
 		device_button_edit_box.pack_start(set_as_default_device_button, False, True, 0)
-		device_button_edit_box.pack_start(delete_port_button, False, True, 0)
+		device_button_edit_box.pack_start(delete_device_button, False, True, 0)
 		right_box.pack_start(device_button_edit_box, False, True, 0)
 
 		# Stream Restoration
@@ -876,15 +876,19 @@ class RestoreDbUI(Gtk.Window):
 		currently_selected_device = name
 		currently_selected_device_type = device_type
 		self.selected_device_label.set_label(name)
+
+		children = self.listbox_available_ports.get_children()
+		for child in children:
+			self.listbox_available_ports.remove(child)
+
+		if device == None:
+			return
+
 		default_port = device['default_port']['port']
 		if default_port:
 			self.default_port_entry.set_text(default_port)
 		else:
 			self.default_port_entry.set_text("null")
-
-		children = self.listbox_available_ports.get_children()
-		for child in children:
-			self.listbox_available_ports.remove(child)
 
 		ports = device['ports']
 		for i in ports.keys():
@@ -943,6 +947,29 @@ class RestoreDbUI(Gtk.Window):
 			currently_selected_device,
 			device_map[currently_selected_device_type][currently_selected_device],
 			currently_selected_device_type)
+
+	def delete_device_clicked(self, widget):
+		global db
+		global device_map
+		global currently_selected_device
+		global currently_selected_device_type
+		full_device_name = currently_selected_device_type+":"+currently_selected_device
+		dialog = DialogConfirmDeleteRule(self, full_device_name, "Device Rule Deletion")
+		response = dialog.run()
+
+		if response == Gtk.ResponseType.OK:
+			# for the default port rule
+			db.delete(full_device_name.encode())
+			# for individual ports
+			for port in device_map[currently_selected_device_type][currently_selected_device]['ports'].keys():
+				db.delete((full_device_name+":"+port).encode())
+			refresh_device_map()
+			self.refresh_listbox_sink()
+			self.refresh_listbox_source()
+			self.show_selected_device("", None, "")
+
+		dialog.destroy()
+
 
 
 win = RestoreDbUI()
